@@ -68,7 +68,9 @@ local deployment = k.apps.v1.deployment + {
         containers=[
           container.new("tailscaled", $._images.tailscale) +
           container.withCommand("/config/run.sh") +
-          container.withEnv(envVar.fromSecretRef("AUTH_KEY", self.stateSecret.metadata.name, "AUTH_KEY")) +
+          container.withEnv(
+            envVar.fromSecretRef("AUTH_KEY", self.stateSecret.metadata.name, "AUTH_KEY")
+          ) +
           container.withEnvMap({
             USERSPACE: "true",
             ROUTES: std.join(",", $._config.tailscale.routes),
@@ -84,12 +86,14 @@ local deployment = k.apps.v1.deployment + {
             memory: "300Mi",
           })
         ]
+      ) +
+      deployment.spec.template.spec.withServiceAccountName(self.serviceAccount.metadata.name) +
+      deployment.spec.template.spec.securityContext.withRunAsUser(1000) +
+      deployment.spec.template.spec.securityContext.withRunAsGroup(1000) +
+      deployment.configMapVolumeMount(
+        self.configMap, "/config",
+        volumeMixin={configMap+: {defaultMode: std.parseOctal("0755")}}
       )
-      + deployment.spec.template.spec.withServiceAccountName(self.serviceAccount.metadata.name)
-      + deployment.spec.template.spec.securityContext.withRunAsUser(1000)
-      + deployment.spec.template.spec.securityContext.withRunAsGroup(1000)
-      + deployment.configMapVolumeMount(self.configMap, "/config",
-                                        volumeMixin={configMap+: {defaultMode: std.parseOctal("0755")}})
     ),
 
 
