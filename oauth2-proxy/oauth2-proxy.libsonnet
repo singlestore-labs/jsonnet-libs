@@ -25,6 +25,7 @@ local genFlags(xs) = [
     keycloak_realm_url: error "Must set keycloak_realm_url (e.g. https://auth.example.com/auth/realms/example)",
 
     ingress_class: "nginx",
+    ingress_ssl_issuer: "letsencrypt-prod",
     ingress_fqdn: error "Must set ingress_fqdn (e.g. oauth2-proxy.example.com)",
     ingress_url: "https://%s" % self.ingress_fqdn,
 
@@ -168,7 +169,7 @@ local genFlags(xs) = [
           httpIngressPath.backend.service.port.withNumber($._config.ports.http)
         ])
       ]) +
-      ingress.metadata.withAnnotationsMixin({"cert-manager.io/cluster-issuer": "letsencrypt-prod"}) +
+      ingress.metadata.withAnnotationsMixin({"cert-manager.io/cluster-issuer": $._config.ingress_ssl_issuer}) +
       ingress.spec.withTls([
         k.networking.v1.ingressTLS.withHosts([$._config.ingress_fqdn]) +
         k.networking.v1.ingressTLS.withSecretName("oauth2-proxy-ingress-cert")
