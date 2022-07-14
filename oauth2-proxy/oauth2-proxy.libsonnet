@@ -14,7 +14,7 @@ local genFlags(xs) = [
   if v == null then null
   else if v == true then "--%s" % k
   else "--%s=%s" % [k, std.toString(v)]
-  for k in std.objectFields(xs)
+  for k in std.objectFields(std.prune(xs))
 ];
 
 // TODO: use --provider=keycloak-oidc for keycloak
@@ -24,16 +24,33 @@ local genFlags(xs) = [
   _config:: {
     keycloak_realm_url: error "Must set keycloak_realm_url (e.g. https://auth.example.com/auth/realms/example)",
 
+    ingress_class: "nginx",
     ingress_fqdn: error "Must set ingress_fqdn (e.g. oauth2-proxy.example.com)",
     ingress_url: "https://%s" % self.ingress_fqdn,
 
-    oauth_cookie_secret: error "Must set oauth_cookie_secret (should be a base64-encoded random string)",
     oauth_client_id: error "Must set oauth_client_id",
-    oauth_client_secret: error "Must set oauth_client_secret",
 
-    ingress_class: "nginx",
+    oauth_client_secret: if self.oauth_secret_name == "" then error "Must set oauth_client_secret",
+    oauth_cookie_secret: if self.oauth_secret_name == "" then error "Must set oauth_cookie_secret (should be a base64-encoded random string)",
+
+    oauth_secret_name: "",
+
+    cookie_domain: null,
+    cookie_name: null,
+    email_domain: "*",
+    whitelist_domain: null,
+
+    nodeSelector: {},
+    tolerations: [],
 
     replicas: 3,
+    resources: {
+      limits: {},
+      requests: {
+        cpu: "100m",
+        memory: "300Mi",
+      },
+    },
 
     ports: {
       http: 4180,
@@ -51,6 +68,7 @@ local genFlags(xs) = [
       "pass-access-token": true,   // set X-Auth-Request-Access-Token (when --set-xauthrequest is also set)
       "set-xauthrequest": true,    // set X-Auth-Request-{User,Groups,Email,Preferred-Username} in response
       "set-authorization-header": true,
+      "client-id": $._config.oauth_client_id,
 
       "redirect-url": "%(ingress_url)s/oauth2/callback" % $._config,
 
@@ -61,10 +79,10 @@ local genFlags(xs) = [
       "profile-url": "%(keycloak_realm_url)s/protocol/openid-connect/userinfo" % $._config,
       "validate-url": "%(keycloak_realm_url)s/protocol/openid-connect/userinfo" % $._config,
 
-      // "email-domain": "example.com",
-      // "whitelist-domain": ".example.com",
-      // "cookie-domain": "oauth2-proxy.example.com",
-      // "cookie-name": "oauth2-proxy",
+      "email-domain": $._config.email_domain,
+      "whitelist-domain": $._config.whitelist_domain,
+      "cookie-domain": $._config.cookie_domain,
+      "cookie-name": $._config.cookie_name,
 
     }
   },
@@ -74,14 +92,15 @@ local genFlags(xs) = [
   },
 
   oauth2_proxy: {
-
-    secret: (
+    secret: if $._config.oauth_secret_name != "" then {} else (
       secret.new(name="oauth2-proxy", data={
-        OAUTH2_PROXY_CLIENT_ID: std.base64($._config.oauth_client_id),
         OAUTH2_PROXY_CLIENT_SECRET: std.base64($._config.oauth_client_secret),
         OAUTH2_PROXY_COOKIE_SECRET: std.base64($._config.oauth_cookie_secret),
       })
     ),
+    local secretName = if $._config.oauth_secret_name != "" then
+        $._config.oauth_secret_name
+      else $.oauth2_proxy.secret.metadata.name,
 
     deployment: (
       deployment.new(
@@ -91,7 +110,7 @@ local genFlags(xs) = [
           container.new("oauth2-proxy", $._images.oauth2_proxy) +
           container.withPorts(std.objectValues(std.mapWithKey(port.new, $._config.ports))) +
           container.withEnvFrom(
-            envFromSource.secretRef.withName($.oauth2_proxy.secret.metadata.name)
+            envFromSource.secretRef.withName(secretName)
           ) +
           container.livenessProbe.httpGet.withPort($._config.ports.http) +
           container.livenessProbe.httpGet.withPath("/ping") +
@@ -101,16 +120,16 @@ local genFlags(xs) = [
           container.readinessProbe.httpGet.withPath("/ping") +
           container.readinessProbe.withInitialDelaySeconds(0) +
           container.readinessProbe.withTimeoutSeconds(1) +
-          container.resources.withRequests({
-            cpu: "100m",
-            memory: "300Mi",
-          }) +
+          container.resources.withLimits($._config.resources.limits) +
+          container.resources.withRequests($._config.resources.requests) +
           container.withArgs(genFlags($._config.args))
         ]
-      ) +
-      deployment.spec.template.metadata.withAnnotations({
-        "checksum/secret": std.md5(std.toString($.oauth2_proxy.secret.data)),
-      })
+      ) + deployment.spec.template.spec.withNodeSelector($._config.nodeSelector)
+        + deployment.spec.template.spec.withTolerations($._config.tolerations)
+        + if $._config.oauth_secret_name != "" then {} else
+          deployment.spec.template.metadata.withAnnotations({
+            "checksum/secret": std.md5(std.toString($.oauth2_proxy.secret.data)),
+          }) 
     ),
 
     service: k.util.serviceFor(self.deployment),
