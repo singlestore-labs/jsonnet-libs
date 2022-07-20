@@ -3,9 +3,8 @@ local k = import "github.com/grafana/jsonnet-libs/ksonnet-util/kausal.libsonnet"
 local deployment = k.apps.v1.deployment;
 local container = k.core.v1.container;
 local port = k.core.v1.containerPort;
-local ingress = k.networking.v1.ingress;
-local ingressRule = k.networking.v1.ingressRule;
-local httpIngressPath = k.networking.v1.httpIngressPath;
+local networkV1 = k.networking.v1;
+local networkV1B1 = k.networking.v1beta1;
 local secret = k.core.v1.secret;
 local envFromSource = k.core.v1.envFromSource;
 
@@ -28,6 +27,7 @@ local genFlags(xs) = [
     ingress_ssl_issuer: "letsencrypt-prod",
     ingress_fqdn: error "Must set ingress_fqdn (e.g. oauth2-proxy.example.com)",
     ingress_url: "https://%s" % self.ingress_fqdn,
+    ingress_api_v1: true,
 
     oauth_client_id: error "Must set oauth_client_id",
 
@@ -153,6 +153,9 @@ local genFlags(xs) = [
       },
     },
 
+    local network = if $._config.ingress_api_v1 then networkV1 else networkV1B1,
+    local ingress = network.ingress,
+    local httpIngressPath = network.httpIngressPath,
     ingress: (
       ingress.new("oauth2-proxy") +
       ingress.metadata.withAnnotationsMixin({
@@ -161,12 +164,16 @@ local genFlags(xs) = [
       }) +
       ingress.spec.withIngressClassName($._config.ingress_class) +
       ingress.spec.withRules([
-        ingressRule.withHost($._config.ingress_fqdn) +
-        ingressRule.http.withPaths([
+        network.ingressRule.withHost($._config.ingress_fqdn) +
+        network.ingressRule.http.withPaths([
           httpIngressPath.withPath("/") +
           httpIngressPath.withPathType("Prefix") +
-          httpIngressPath.backend.service.withName($.oauth2_proxy.service.metadata.name) +
-          httpIngressPath.backend.service.port.withNumber($._config.ports.http)
+          (if $._config.ingress_api_v1 then
+            httpIngressPath.backend.service.withName($.oauth2_proxy.service.metadata.name) +
+            httpIngressPath.backend.service.port.withNumber($._config.ports.http)
+          else
+            httpIngressPath.backend.withServiceName($.oauth2_proxy.service.metadata.name) +
+            httpIngressPath.backend.withServicePort($._config.ports.http))
         ])
       ]) +
       ingress.metadata.withAnnotationsMixin({"cert-manager.io/cluster-issuer": $._config.ingress_ssl_issuer}) +
